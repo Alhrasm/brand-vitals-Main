@@ -24,7 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REMOTE_PATH: /home/dh_ygia26/brandvitals.io/
+  # Verified 2026-10-10: the web root for brandvitals.io (not .../brandvitals.io/).
+  REMOTE_PATH: /home/dh_ygia26/brandvitals/
   SITE_URL: https://brandvitals.io
   # Repo files that are not part of the public website.
   RSYNC_EXCLUDES: >-
@@ -91,9 +92,9 @@ jobs:
       - name: Back up the current release on the server
         run: |
           set -euo pipefail
-          ssh dreamhost "mkdir -p ~/backups/brandvitals.io && \
-            tar -czf ~/backups/brandvitals.io/release-$(date -u +%Y%m%dT%H%M%SZ)-pre-${GITHUB_SHA::7}.tgz -C '$REMOTE_PATH' . && \
-            ls -1t ~/backups/brandvitals.io/release-*.tgz | tail -n +16 | xargs -r rm -f"
+          ssh dreamhost "mkdir -p ~/backups/brandvitals && \
+            tar -czf ~/backups/brandvitals/release-$(date -u +%Y%m%dT%H%M%SZ)-pre-${GITHUB_SHA::7}.tgz -C '$REMOTE_PATH' . && \
+            ls -1t ~/backups/brandvitals/release-*.tgz | tail -n +16 | xargs -r rm -f"
 
       - name: Sync files to DreamHost
         run: |
