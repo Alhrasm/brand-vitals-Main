@@ -1,0 +1,12 @@
+# Brand Vitals: make browsers re-check pages, styles and scripts on every visit
+# (cheap 304 when unchanged), so dashboard publishes show up at once instead of
+# after DreamHost's default 30-day cache. Images keep the long default cache.
+<FilesMatch "\.(html?|css|js|json|xml|txt)$">
+  <IfModule mod_expires.c>
+    ExpiresActive Off
+  </IfModule>
+  <IfModule mod_headers.c>
+    Header set Cache-Control "no-cache"
+    Header unset Expires
+  </IfModule>
+</FilesMatch>
