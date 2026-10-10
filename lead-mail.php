@@ -6,7 +6,7 @@
  * which DreamHost delivers through its own mail servers (SPF covers them).
  */
 
-const LEAD_TO   = 'info@brandvitals.io';
+const LEAD_TO   = 'info@brandvitals.io, mohamed@brandvitals.io';
 const LEAD_FROM = 'noreply@brandvitals.io';
 const SITE_HOST = 'brandvitals.io';
 const MAX_PER_HOUR = 5;           // per visitor IP
