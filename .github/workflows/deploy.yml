@@ -1,0 +1,124 @@
+# Deploys the static site to DreamHost (production: https://brandvitals.io).
+# Triggered by every push to main, including the commits made by the dashboard
+# (dashboard.html → GitHub API → this workflow → DreamHost).
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST          DreamHost SSH server, e.g. iad1-shared-xx-xx.dreamhost.com
+#   DEPLOY_USER          SSH user (dh_ygia26)
+#   DEPLOY_PRIVATE_KEY   private key whose public half is in ~/.ssh/authorized_keys on DreamHost
+#   DEPLOY_KNOWN_HOSTS   output of: ssh-keyscan -p <port> <DEPLOY_HOST>
+#   DEPLOY_PORT          optional, defaults to 22
+name: Deploy to DreamHost
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, in order. Never cancel a deploy half-way through rsync.
+concurrency:
+  group: brandvitals-production-deploy
+  cancel-in-progress: false
+
+env:
+  # Verified 2026-10-10: the web root for brandvitals.io (not .../brandvitals.io/).
+  REMOTE_PATH: /home/dh_ygia26/brandvitals/
+  SITE_URL: https://brandvitals.io
+  # Repo files that are not part of the public website.
+  RSYNC_EXCLUDES: >-
+    --exclude=.git/ --exclude=.github/ --exclude=.gitignore --exclude=.gitattributes
+    --exclude=.nojekyll --exclude=README.md --exclude=server.js --exclude=*.zip
+    --exclude=/brandvitals --exclude=.impeccable/
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate site files
+        run: |
+          set -euo pipefail
+          for f in index.html dashboard.html assets/css/main.css assets/js/main.js assets/js/dashboard.js; do
+            test -s "$f" || { echo "::error::Missing required file $f"; exit 1; }
+          done
+          # Every HTML page must be a complete document.
+          for f in *.html; do
+            grep -qi '</html>' "$f" || { echo "::error::$f is truncated (no </html>)"; exit 1; }
+          done
+          # Never ship credentials to the public web root.
+          if grep -rIlE 'gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sb_secret_[A-Za-z0-9_]{10,}|BEGIN [A-Z ]*PRIVATE KEY' \
+               --exclude-dir=.git --exclude-dir=.github . ; then
+            echo "::error::Possible secret found in the files above. Deploy stopped."; exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          for v in KEY KNOWN_HOSTS HOST USER; do
+            test -n "${!v}" || { echo "::error::Secret for $v is not set. See the header of deploy.yml."; exit 1; }
+          done
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+          {
+            echo "Host dreamhost"
+            echo "  HostName $HOST"
+            echo "  User $USER"
+            echo "  Port ${{ secrets.DEPLOY_PORT || '22' }}"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking yes"
+          } > ~/.ssh/config
+
+      - name: Check the production document root
+        run: |
+          set -euo pipefail
+          # Refuse to deploy unless the target already looks like this site.
+          ssh dreamhost "test -d '$REMOTE_PATH' && test -f '$REMOTE_PATH/index.html'" \
+            || { echo "::error::$REMOTE_PATH is not the site root on DreamHost."; exit 1; }
+
+      - name: Back up the current release on the server
+        run: |
+          set -euo pipefail
+          ssh dreamhost "mkdir -p ~/backups/brandvitals && \
+            tar -czf ~/backups/brandvitals/release-$(date -u +%Y%m%dT%H%M%SZ)-pre-${GITHUB_SHA::7}.tgz -C '$REMOTE_PATH' . && \
+            ls -1t ~/backups/brandvitals/release-*.tgz | tail -n +16 | xargs -r rm -f"
+
+      - name: Sync files to DreamHost
+        run: |
+          set -euo pipefail
+          # No --delete: server-only files (.htaccess, uploads, older assets) are preserved.
+          rsync -rlvz --checksum --no-perms --chmod=D755,F644 $RSYNC_EXCLUDES ./ "dreamhost:$REMOTE_PATH"
+
+      - name: Verify the live site serves this commit
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in *.html assets/css/main.css assets/js/main.js assets/js/dashboard.js robots.txt sitemap.xml; do
+            [ -f "$f" ] || continue
+            want=$(sha256sum < "$f" | cut -d' ' -f1)
+            got=""
+            for i in 1 2 3 4 5 6; do
+              got=$(curl -fsS --compressed -H 'Cache-Control: no-cache' "$SITE_URL/$f?deploy=$GITHUB_SHA" | sha256sum | cut -d' ' -f1) || true
+              [ "$got" = "$want" ] && break
+              sleep 5
+            done
+            if [ "$got" = "$want" ]; then echo "OK   $f"; else echo "::error::Live $f does not match commit ${GITHUB_SHA::7}"; fail=1; fi
+          done
+          exit $fail
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
