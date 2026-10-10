@@ -395,7 +395,9 @@
             return;
           }
           if (btn) btn.classList.add("is-loading");
-          Track.lead(data).then(succeed).catch(() => {
+          // Save to the dashboard (Supabase) and e-mail a copy; either one reaching us counts.
+          Promise.allSettled([Track.lead(data), Forms.mail(data)]).then(rs => {
+            if (rs.some(r => r.status === "fulfilled")) { succeed(); return; }
             if (btn) btn.classList.remove("is-loading");
             Forms.errorNotice(data);
           });
@@ -434,6 +436,14 @@
         message: extra.length ? extra.join("\n") + (msg ? "\n\n" + msg : "") : msg,
         website: get("website"), form: form.dataset.form || (form.closest("#consultModal") ? "consult" : "contact")
       };
+    },
+    // E-mails a copy of the lead to the inbox (lead-mail.php on DreamHost).
+    mail(d) {
+      const page = Track.page();
+      return fetch("lead-mail.php", {
+        method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true, credentials: "omit",
+        body: JSON.stringify(Object.assign({}, d, { page, lang: doc.lang || "en" }))
+      }).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); });
     },
     waNumber() {
       const a = document.querySelector('a[href*="wa.me/"]');
